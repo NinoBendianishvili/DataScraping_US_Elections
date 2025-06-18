@@ -1,0 +1,26 @@
+# Central Configuration for the Python Data Scraping Project
+
+scraper:
+  target_years: [2020, 2016, 2012, 2008, 2004, 2000]
+  delay_seconds: 0.7
+  max_workers: 5
+
+paths:
+  # Directory for raw scraped data
+  data_output_dir: "data_output"
+  # Directory for final generated reports
+  analysis_report_dir: "analysis_report"
+
+filenames:
+  # Raw data filenames
+  csv_output: "election_results_combined.csv"
+  json_output: "election_results_combined.json"
+  # Report filenames
+  bar_chart_report: "election_analysis_report.html"
+  static_maps_report: "election_static_maps_report.html"
+
+templates:
+  # Path is relative to the reporter.py file
+  template_dir: "templates"
+  bar_chart_template: "report_template.html"
+  map_report_template: "map_report_template.html"

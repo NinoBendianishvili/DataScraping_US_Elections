@@ -1,2 +1,16 @@
-output/
+# Python
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+*.egg-info/
+
+# Output Data
+data_output/
+analysis_report/
+
+# IDE files
+.vscode/
+.idea/

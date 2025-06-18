@@ -1,52 +1,77 @@
 import time
 import os
-from typing import List
-from scraper.collector import StateElectionScraper
-from models.data_models import Party, ElectionResult, StateData, YearData
-from utils.file_handler import save_to_csv, save_to_json
-from utils.generator import generate_static_maps_report  # <-- Import the generator function
+import sys  # Import sys to exit gracefully
+from src.scrapers.election_scraper import StateElectionScraper
+from src.data.processors import save_to_csv, save_to_json
+from src.analysis.reporter import generate_analysis_reports
+from src.utils.config_loader import load_config
 
-TARGET_YEARS = [2020, 2016, 2012, 2008, 2004, 2000]
-SCRAPER_DELAY_SECONDS = 0.7
-OUTPUT_DIR = "output"
-CSV_FILENAME = "election_results_combined.csv"
-JSON_FILENAME = "election_results_combined.json"
-HTML_FILENAME = "election_static_maps_report.html"
+def main():
+    """Main function to run the entire scraping and analysis pipeline."""
 
-def run_test_scrape():
-    """Runs the scraper, prints test output, and saves results to files."""
-    print("-" * 30)
-    print("Starting Combined Scraper Run...")
-    print("-" * 30)
+    # 1. Load Configuration
+    config = load_config()
 
+    # --- ADD THIS CHECK ---
+    # If config loading fails, log_config already printed an error. Exit gracefully.
+    if config is None:
+        print("Configuration could not be loaded. Aborting execution.")
+        sys.exit(1) # Exit with a non-zero status code to indicate an error
+    # --- END OF CHECK ---
+
+    scraper_config = config['scraper']
+    paths_config = config['paths']
+    filenames_config = config['filenames']
+
+    print("=" * 30)
+    print("Starting Election Data Scraper and Analyzer")
+    print("=" * 30)
+
+    # 2. Scrape Data
     scraper = StateElectionScraper(
-        target_years=TARGET_YEARS,
-        delay_seconds=SCRAPER_DELAY_SECONDS
+        target_years=scraper_config['target_years'],
+        delay_seconds=scraper_config['delay_seconds'],
+        max_workers=scraper_config['max_workers']
     )
-
-    all_results: List[ElectionResult] = scraper.scrape_all_states()
+    all_results = scraper.scrape_all_states()
 
     if not all_results:
-        print("No results were collected.")
+        print("Scraping finished, but no results were collected. Exiting.")
         return
 
+    # 3. Process and Save Raw Data
     print("\n" + "-" * 30)
-    print("Saving Results...")
+    print("Saving Raw Scraped Data...")
     print("-" * 30)
 
-    save_to_csv(all_results, CSV_FILENAME, OUTPUT_DIR)
-    save_to_json(all_results, JSON_FILENAME, OUTPUT_DIR)
+    # Ensure output directory exists
+    os.makedirs(paths_config['data_output_dir'], exist_ok=True)
 
-    print("\nGenerating HTML Map Report...")
-    json_path = os.path.join(OUTPUT_DIR, JSON_FILENAME)
-    html_path = os.path.join(OUTPUT_DIR, HTML_FILENAME)
-    generate_static_maps_report(json_path, html_path)
-    print(f"Report generated at: {html_path}")
+    csv_path = os.path.join(paths_config['data_output_dir'], filenames_config['csv_output'])
+    json_path = os.path.join(paths_config['data_output_dir'], filenames_config['json_output'])
+
+    save_to_csv(all_results, csv_path)
+    save_to_json(all_results, json_path)
+
+    # 4. Analyze Data and Generate Reports
+    print("\n" + "-" * 30)
+    print("Analyzing Data and Generating Reports...")
+    print("-" * 30)
+
+    # Ensure report directory exists
+    os.makedirs(paths_config['analysis_report_dir'], exist_ok=True)
+
+    generate_analysis_reports(
+        input_csv_path=csv_path,
+        report_dir=paths_config['analysis_report_dir'],
+        bar_chart_filename=filenames_config['bar_chart_report'],
+        static_maps_filename=filenames_config['static_maps_report'],
+        template_config=config['templates']
+    )
 
 if __name__ == "__main__":
     start_time = time.time()
-    run_test_scrape()
+    main()
     end_time = time.time()
     print(f"\nTotal execution time: {end_time - start_time:.2f} seconds.")
-    print("\nNote:")
-    print(f"- Check the '{OUTPUT_DIR}' directory for '{CSV_FILENAME}', '{JSON_FILENAME}', and the HTML map report.")
+    print("\nPipeline finished successfully!")
