@@ -63,54 +63,30 @@ def create_tables(conn: sqlite3.Connection):
         logger.error(f"Database error during table creation: {e}", exc_info=True)
         conn.rollback()
 
-def save_results_to_db(results: List[ElectionResult]):
-    """
-    Saves a list of ElectionResult objects to the database, handling
-    insertions into normalized tables.
-    """
-    if not results:
-        logger.warning("No results to save to the database.")
+def save_national_data_to_db(national_data: dict):
+    """Saves the national election year data to the 'elections' table."""
+    if not national_data:
+        logger.warning("No national data provided to save to the database.")
         return
 
-    logger.info(f"Saving {len(results)} results to the database...")
+    logger.info("Saving national election data to the database...")
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-
-        for result in results:
-            # Insert state data (will be ignored if it already exists)
+        for year, data in national_data.items():
             cursor.execute(
-                "INSERT OR IGNORE INTO states (state_name, electoral_votes) VALUES (?, ?)",
-                (result.state_info.state_name, result.state_info.electoral_votes)
-            )
-
-            # Insert election year data (will be ignored if it already exists)
-            cursor.execute(
-                """INSERT OR IGNORE INTO elections (year, dem_leader, rep_leader, 
-                                                  dem_national_votes, rep_national_votes, total_national_votes) 
+                """INSERT OR REPLACE INTO elections (year, dem_leader, rep_leader, 
+                                                   dem_national_votes, rep_national_votes, total_national_votes) 
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (
-                    result.year_info.year, result.year_info.dem_leader, result.year_info.rep_leader,
-                    result.year_info.dem_votes, result.year_info.rep_votes, result.year_info.total_national_votes
+                    year, data.get('dem_leader'), data.get('rep_leader'),
+                    data.get('dem_votes'), data.get('rep_votes'), data.get('total_national_votes')
                 )
             )
-
-            # Insert the specific result (linking state and year)
-            cursor.execute(
-                """INSERT OR REPLACE INTO results (state_name, year, dem_state_percentage, 
-                                                 rep_state_percentage, state_winner) 
-                   VALUES (?, ?, ?, ?, ?)""",
-                (
-                    result.state_info.state_name, result.year_info.year,
-                    result.dem_percentage, result.rep_percentage,
-                    result.winner.value if result.winner else None
-                )
-            )
-
         conn.commit()
-        logger.info("Successfully saved all results to the database.")
+        logger.info("Successfully saved national data.")
     except sqlite3.Error as e:
-        logger.error(f"Database error during insertion: {e}", exc_info=True)
+        logger.error(f"Database error during national data insertion: {e}", exc_info=True)
         conn.rollback()
     finally:
         conn.close()
