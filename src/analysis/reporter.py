@@ -5,10 +5,13 @@ This module consolidates the logic from the original analyzer.py and generator.p
 
 import os
 import logging
-import pandas as pd
 import plotly.express as px
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from typing import List, Dict, Optional, Any
+import pandas as pd
+import sqlite3 # Add sqlite3 import
+from src.data.database import DB_PATH # Import the DB path
+
 
 logger = logging.getLogger(__name__)
 
@@ -19,24 +22,42 @@ DEM_LEADER_COL, REP_LEADER_COL = 'dem_leader', 'rep_leader'
 DEM_NAT_VOTE_COL, REP_NAT_VOTE_COL = 'dem_national_votes', 'rep_national_votes'
 DEM_STATE_PCT_COL, REP_STATE_PCT_COL = 'dem_state_percentage', 'rep_state_percentage'
 
-def _load_and_clean_data(filepath: str) -> Optional[pd.DataFrame]:
-    """Loads and cleans the election data from a CSV file."""
-    logger.info(f"Loading data from: {filepath}")
-    if not os.path.exists(filepath):
-        logger.error(f"Input CSV file not found at {filepath}")
+def _load_and_clean_data() -> Optional[pd.DataFrame]:
+    """Loads and cleans the election data by querying the SQLite database."""
+    logger.info(f"Loading data from database: {DB_PATH}")
+    if not os.path.exists(DB_PATH):
+        logger.error(f"Database file not found at {DB_PATH}. Please run the scraper first.")
         return None
+
     try:
-        df = pd.read_csv(filepath)
-        # Basic cleaning and type conversion
-        numeric_cols = [DEM_NAT_VOTE_COL, REP_NAT_VOTE_COL, DEM_STATE_PCT_COL, REP_STATE_PCT_COL]
-        for col in numeric_cols:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        df.dropna(subset=[YEAR_COL, STATE_NAME_COL, WINNER_COL], inplace=True)
+        conn = sqlite3.connect(DB_PATH)
+        # SQL query to join all tables and reconstruct the flat data structure
+        query = """
+            SELECT
+                r.year,
+                r.state_name,
+                s.electoral_votes,
+                r.state_winner,
+                r.dem_state_percentage,
+                r.rep_state_percentage,
+                e.dem_leader,
+                e.rep_leader,
+                e.dem_national_votes,
+                e.rep_national_votes,
+                e.total_national_votes
+            FROM results r
+            JOIN states s ON r.state_name = s.state_name
+            JOIN elections e ON r.year = e.year
+        """
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+
+        # The rest of the cleaning is minimal since the DB enforces types
         df[YEAR_COL] = df[YEAR_COL].astype(int)
-        logger.info(f"Successfully loaded and cleaned data. Shape: {df.shape}")
+        logger.info(f"Successfully loaded data from database. Shape: {df.shape}")
         return df
-    except Exception as e:
-        logger.error(f"Failed to load or clean data: {e}", exc_info=True)
+    except (sqlite3.Error, pd.errors.DatabaseError) as e:
+        logger.error(f"Failed to load data from database: {e}", exc_info=True)
         return None
 
 def _create_national_trends_plot(df: pd.DataFrame) -> Optional[str]:
@@ -47,10 +68,10 @@ def _create_national_trends_plot(df: pd.DataFrame) -> Optional[str]:
         national_df['total'] = national_df[DEM_NAT_VOTE_COL] + national_df[REP_NAT_VOTE_COL]
         national_df['Democratic (%)'] = (national_df[DEM_NAT_VOTE_COL] / national_df['total']) * 100
         national_df['Republican (%)'] = (national_df[REP_NAT_VOTE_COL] / national_df['total']) * 100
-        
+
         plot_df = national_df.melt(id_vars=YEAR_COL, value_vars=['Democratic (%)', 'Republican (%)'],
                                    var_name='Party', value_name='Percentage')
-        
+
         fig = px.bar(plot_df, x=YEAR_COL, y='Percentage', color='Party', barmode='group',
                      title="National Popular Vote Share (%) by Year",
                      labels={'Percentage': 'Vote Percentage (%)', YEAR_COL: 'Election Year'},
@@ -65,7 +86,7 @@ def _create_state_trends_plot(df: pd.DataFrame, state_name: str) -> Optional[str
     """Generates a Plotly bar chart for a single state's vote trends."""
     state_df = df[df[STATE_NAME_COL] == state_name]
     if state_df.empty: return None
-    
+
     plot_df = state_df.melt(id_vars=YEAR_COL, value_vars=[DEM_STATE_PCT_COL, REP_STATE_PCT_COL],
                             var_name='Party', value_name='Percentage')
     plot_df['Party'] = plot_df['Party'].map({DEM_STATE_PCT_COL: 'Democratic', REP_STATE_PCT_COL: 'Republican'})
@@ -104,10 +125,11 @@ def _render_and_save_report(template_dir: str, template_name: str, context: Dict
     except Exception as e:
         logger.error(f"Failed to render or save report {template_name}: {e}", exc_info=True)
 
-def generate_analysis_reports(input_csv_path: str, report_dir: str, bar_chart_filename: str,
-                              static_maps_filename: str, template_config: Dict[str, str]):
+def generate_analysis_reports(report_dir: str, bar_chart_filename: str,
+                              static_maps_filename: str, template_config: Dict[str, str], **kwargs):
     """Main function to generate all analysis reports."""
-    df = _load_and_clean_data(input_csv_path)
+    # The function no longer needs input_csv_path
+    df = _load_and_clean_data()
     if df is None or df.empty:
         logger.error("Analysis aborted due to data loading failure.")
         return
@@ -138,7 +160,7 @@ def generate_analysis_reports(input_csv_path: str, report_dir: str, bar_chart_fi
         map_div = _create_election_map_plot(df_year, year, include_js=(i == 0))
         if map_div:
             map_divs[year] = map_div
-    
+
     maps_context = {
         'map_divs': map_divs,
         'years_sorted': sorted(map_divs.keys())

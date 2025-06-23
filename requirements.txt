@@ -1,7 +1,25 @@
+# Core Scraping & HTTP Requests
 requests
 beautifulsoup4
 lxml
+scrapy  # For Task A-3
+
+# Data Analysis & Reporting
 pandas
 plotly
 jinja2
+
+# Command-Line Interface & User Experience
+click   # Recommended for a cleaner CLI than argparse
+tqdm    # For progress bars (Task C-2)
+
+# Configuration & Utilities
 PyYAML
+
+# Browser Automation & Dynamic Scraping
+selenium # For Task B-1
+
+# Code Quality & Testing
+pytest            # For unit testing (Task D-1)
+flake8            # For linting (Task D-3)
+black             # For code formatting (Task D-3)

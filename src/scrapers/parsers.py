@@ -30,35 +30,34 @@ def fetch_and_parse(url: str, session: requests.Session, delay_seconds: float) -
 def parse_state_links(soup: BeautifulSoup) -> Dict[str, str]:
     """
     Parses the main states list page to find state names and their relative URLs.
-    This version is updated to handle the current website structure.
+    This version is updated to handle the latest table-based layout.
     """
     state_links = {}
     if not soup:
         logger.warning("No soup object provided to parse_state_links.")
         return state_links
 
-    # NEW, MORE ROBUST STRATEGY: Target the specific container div by its ID.
-    # This is much more reliable than searching for generic tags like <h2>.
-    container = soup.find('div', id='states_container')
+    # --- NEW STRATEGY: Target the table by its class name ---
+    # The links are now inside a table with the class 'states-table'.
+    states_table = soup.find('table', class_='states-table')
 
-    if not container:
-        logger.error("Could not find the main state link container (<div id='states_container'>). The website structure has likely changed again.")
+    # If the table isn't found, log an error and exit gracefully.
+    if not states_table:
+        logger.error("Could not find the state links table (e.g., <table class='states-table'>). The website structure has likely changed again.")
         return state_links
 
-    # Select all anchor tags within the container that link to a state page.
-    links = container.select('a[href^="/states/"]')
+    # The links are all anchor tags within the table body.
+    # The selector 'a[href^="/states/"]' is specific and robust.
+    links = states_table.select('a[href^="/states/"]')
 
     for link in links:
         href = link.get('href')
-        # The text inside the link is the state name.
+        # The state name is the clean text of the link.
         name = link.get_text(strip=True)
 
-        # A final check to ensure we have a valid name and href.
         if href and name:
-            # We don't need to clean the name anymore, as the " (X EV)" part is gone.
             state_links[name] = href
 
-    # The log message is now inside the function, making it more accurate.
     logger.info(f"Extracted {len(state_links)} state links.")
     return state_links
 

@@ -1,16 +1,28 @@
-# Python
+# --- Generated Data & Artifacts ---
+# This is the most important section. Never commit generated output.
+data_output/
+analysis_report/
+election_data.db  # <<<--- NEW AND CRITICAL: Ignore the SQLite database file.
+
+# --- Python ---
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .env
 venv/
+env/
 *.egg-info/
+dist/
+build/
+*.spec
 
-# Output Data
-data_output/
-analysis_report/
-
-# IDE files
+# --- IDE & Editor Files ---
 .vscode/
 .idea/
+*.sublime-project
+*.sublime-workspace
+
+# --- OS-specific files ---
+.DS_Store
+Thumbs.db
