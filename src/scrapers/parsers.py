@@ -1,145 +1,58 @@
 """
-Contains stateless parsing functions that use BeautifulSoup to extract
-structured data from fetched HTML content.
+Contains stateless parsing functions used by the non-Scrapy scrapers.
+Currently, this is focused on parsing the national election year pages.
 """
-import re
-import time
-import requests
 import logging
 from bs4 import BeautifulSoup
-from typing import Optional, List, Dict, Any
-
-from ..data.models import Party
+from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
+TARGET_PARTIES = ["Democratic", "Republican"]
 
-def fetch_and_parse(url: str, session: requests.Session, delay_seconds: float) -> Optional[BeautifulSoup]:
-    """Fetches a URL and parses it into a BeautifulSoup object with error handling."""
-    time.sleep(delay_seconds)
-    try:
-        response = session.get(url, timeout=15)
-        response.raise_for_status()
-        return BeautifulSoup(response.content, 'lxml')
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error fetching URL {url}: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"Error parsing content from {url}: {e}")
-        return None
-
-def parse_state_links(soup: BeautifulSoup) -> Dict[str, str]:
+def parse_national_election_page(soup: BeautifulSoup) -> Optional[List[Dict[str, str]]]:
     """
-    Parses the main states list page to find state names and their relative URLs.
-    This version is updated to handle the latest table-based layout.
+    Parses the HTML soup of a national election year page (e.g., /2020-election)
+    to extract candidate and vote data for the two major parties.
+
+    Args:
+        soup: A BeautifulSoup object of the page.
+
+    Returns:
+        A list of dictionaries, where each dictionary represents a candidate,
+        or None if the main table is not found.
     """
-    state_links = {}
-    if not soup:
-        logger.warning("No soup object provided to parse_state_links.")
-        return state_links
+    election_data = []
 
-    # --- NEW STRATEGY: Target the table by its class name ---
-    # The links are now inside a table with the class 'states-table'.
-    states_table = soup.find('table', class_='states-table')
+    # The main data is inside a div with class 'table-responsive'
+    table_div = soup.find('div', class_='table-responsive')
+    if not table_div:
+        logger.warning("Could not find the 'table-responsive' div on the national election page.")
+        return None
 
-    # If the table isn't found, log an error and exit gracefully.
-    if not states_table:
-        logger.error("Could not find the state links table (e.g., <table class='states-table'>). The website structure has likely changed again.")
-        return state_links
+    results_tbody = table_div.find('tbody')
+    if not results_tbody:
+        logger.warning("Could not find the 'tbody' within the results table.")
+        return None
 
-    # The links are all anchor tags within the table body.
-    # The selector 'a[href^="/states/"]' is specific and robust.
-    links = states_table.select('a[href^="/states/"]')
-
-    for link in links:
-        href = link.get('href')
-        # The state name is the clean text of the link.
-        name = link.get_text(strip=True)
-
-        if href and name:
-            state_links[name] = href
-
-    logger.info(f"Extracted {len(state_links)} state links.")
-    return state_links
-
-def parse_state_details(soup: BeautifulSoup) -> Dict[str, Optional[int]]:
-    """Parses a state detail page for electoral votes."""
-    details = {'electoral_votes': None}
-    if not soup: return details
-
-    try:
-        # Strategy 1: Find the large 'ev' span
-        ev_span = soup.find('span', class_='ev')
-        if ev_span and ev_span.get_text(strip=True).isdigit():
-            details['electoral_votes'] = int(ev_span.get_text(strip=True))
-            return details
-        
-        # Strategy 2: Find heading like "9 ELECTORAL VOTES"
-        ev_heading = soup.find(['h2', 'h3'], string=re.compile(r'\d+\s+ELECTORAL VOTES', re.I))
-        if ev_heading:
-            match = re.search(r'(\d+)', ev_heading.get_text())
-            if match:
-                details['electoral_votes'] = int(match.group(1))
-    except (ValueError, TypeError, AttributeError) as e:
-        logger.warning(f"Could not extract electoral votes: {e}")
-
-    return details
-
-def _parse_percentage(text: str) -> Optional[float]:
-    """Helper to robustly parse percentage strings into floats."""
-    if not text: return None
-    match = re.search(r'([\d.]+)', text)
-    if match:
-        try:
-            value = float(match.group(1))
-            return round(value, 2) if 0 <= value <= 100.1 else None
-        except ValueError:
-            return None
-    return None
-
-def parse_election_results_table(soup: BeautifulSoup, target_years: List[int]) -> List[Dict[str, Any]]:
-    """Parses the historical results table on a state page."""
-    parsed_results = []
-    if not soup: return parsed_results
-
-    results_table = soup.find('table', id='recent_elections')
-    if not results_table:
-        logger.warning("Results table with id 'recent_elections' not found.")
-        return parsed_results
-
-    for row in results_table.find_all('tr', class_='toggle-row'):
-        cells = row.find_all('td', recursive=False)
-        if len(cells) < 2: continue
+    for row in results_tbody.find_all('tr'):
+        cells = row.find_all('td')
+        if len(cells) < 6:
+            continue
 
         try:
-            year_text = cells[0].get_text(strip=True)
-            year_match = re.search(r'(\d{4})', year_text)
-            if not (year_match and int(year_match.group(1)) in target_years):
-                continue
-            
-            year = int(year_match.group(1))
-            results_cell = cells[1]
-            
-            # Find percentages within the results cell
-            nested_cells = results_cell.select('table td')
-            if len(nested_cells) >= 3:
-                dem_pct = _parse_percentage(nested_cells[0].get_text())
-                rep_pct = _parse_percentage(nested_cells[2].get_text())
-            else:
-                dem_pct, rep_pct = None, None
+            party = cells[3].get_text(strip=True)
+            if party in TARGET_PARTIES:
+                name = cells[2].get_text(strip=True).split('(')[0].strip()
+                election_data.append({
+                    "party": party,
+                    "leader": name,
+                    "popular_votes": cells[5].get_text(strip=True)
+                })
+                # Stop once we have found both major parties
+                if len(election_data) == len(TARGET_PARTIES):
+                    break
+        except IndexError:
+            logger.warning("Skipping a malformed row in the national results table.")
+            continue
 
-            winner = None
-            if dem_pct is not None and rep_pct is not None:
-                if dem_pct > rep_pct: winner = Party.DEMOCRATIC
-                elif rep_pct > dem_pct: winner = Party.REPUBLICAN
-                else: winner = Party.OTHER
-            
-            parsed_results.append({
-                'year': year,
-                'dem_pct': dem_pct,
-                'rep_pct': rep_pct,
-                'winner': winner
-            })
-        except Exception as e:
-            logger.warning(f"Error parsing a result row: {e} | Row: {row.get_text('|')}")
-
-    return parsed_results
+    return election_data

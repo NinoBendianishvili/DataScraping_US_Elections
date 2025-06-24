@@ -3,48 +3,59 @@ import os
 import sys
 from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
-from src.scrapers.election_scraper import StateElectionScraper # Keep old scraper
-from src.data.database import get_db_connection, create_tables
+from scrapy.settings import Settings
+
+from src.scrapers.election_scraper import StateElectionScraper
+from src.data.database import get_db_connection, create_tables, save_national_data_to_db
 from src.analysis.reporter import generate_analysis_reports
 from src.utils.config_loader import load_config
 from src.scrapers.scrapy_crawler.election_crawler.spiders.state_spider import StateSpider
 
-def run_legacy_scraper(config):
-    """Runs the original scraper based on requests and BeautifulSoup."""
-    print("--- Running Legacy Scraper ---")
+def run_legacy_scraper_for_national_data(config):
+    """Runs the original scraper to fetch ONLY national data."""
+    print("--- Running Legacy Scraper for National Data ---")
     scraper = StateElectionScraper(
         target_years=config['target_years'],
         delay_seconds=config['delay_seconds'],
         max_workers=config['max_workers']
     )
-    # The legacy scraper now only needs to fetch national data
-    # as the state data is handled by Scrapy.
     scraper._fetch_all_national_data()
-
+    return scraper.national_year_data
 
 def run_scrapy_crawler():
-    """Configures and runs the Scrapy crawler."""
+    """Configures and runs the Scrapy crawler without changing directory."""
     print("--- Running Scrapy Crawler for State Data ---")
-    # Scrapy needs to be run from its project directory to find settings
-    project_dir = os.path.join('src', 'scrapers', 'scrapy_crawler')
-    os.chdir(project_dir)
 
-    process = CrawlerProcess(get_project_settings())
+    # --- THIS IS THE NEW, ROBUST WAY ---
+    # 1. Point to the Scrapy settings file
+    project_settings = get_project_settings()
+    settings = Settings()
+    # Scrapy uses its own module loading system, so we need to tell it where to find our project
+    # This is done by adding the path to the src directory to sys.path
+    # The 'election_crawler' module will then be discoverable.
+    sys.path.insert(0, os.path.join(os.getcwd(), 'src', 'scrapers', 'scrapy_crawler'))
+    settings.setmodule('election_crawler.settings', priority='project')
+
+    # 2. Create the process with these settings
+    process = CrawlerProcess(settings)
+
+    # 3. Crawl
     process.crawl(StateSpider)
     process.start() # The script will block here until the crawling is finished
 
-    # Return to the original directory
-    os.chdir(os.path.join('..', '..', '..'))
-
+    # 4. Clean up the path
+    sys.path.pop(0)
 
 def main():
     """Main function to run the entire scraping and analysis pipeline."""
+    # This ensures all paths are relative to the project root where main.py is run
+    project_root = os.getcwd()
+
     config = load_config()
     if config is None:
         print("Configuration could not be loaded. Aborting execution.")
         sys.exit(1)
 
-    # Set up the database
     conn = get_db_connection()
     create_tables(conn)
     conn.close()
@@ -53,14 +64,17 @@ def main():
     print("Starting Election Data Scraper and Analyzer")
     print("=" * 30)
 
-    # --- RUN THE SCRAPERS ---
-    # We can still run the old scraper to get national data
-    run_legacy_scraper(config['scraper'])
-    # Now run the new Scrapy crawler to get all state data
+    # 1. Fetch national data
+    national_data = run_legacy_scraper_for_national_data(config['scraper'])
+
+    # 2. Save national data to the database
+    save_national_data_to_db(national_data)
+
+    # 3. Run Scrapy to fetch state data
     run_scrapy_crawler()
 
     print("\n" + "-" * 30)
-    print("Scraping complete. Data saved to database.")
+    print("Scraping complete. Data is now in the database.")
     print("Analyzing Data and Generating Reports...")
     print("-" * 30)
 
@@ -72,7 +86,6 @@ def main():
         static_maps_filename=config['filenames']['static_maps_report'],
         template_config=config['templates']
     )
-
 
 if __name__ == "__main__":
     start_time = time.time()

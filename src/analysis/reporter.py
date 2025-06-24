@@ -2,24 +2,22 @@
 Handles data analysis and generation of HTML reports with visualizations.
 This module consolidates the logic from the original analyzer.py and generator.py.
 """
-
 import os
 import logging
+import pandas as pd
 import plotly.express as px
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from typing import List, Dict, Optional, Any
-import pandas as pd
-import sqlite3 # Add sqlite3 import
-from src.data.database import DB_PATH # Import the DB path
+import sqlite3
+from src.data.database import DB_PATH
 
 
 logger = logging.getLogger(__name__)
-
 PARTY_COLORS = {'Democratic': 'blue', 'Republican': 'red'}
-# Define column names as constants for robustness
 YEAR_COL, STATE_NAME_COL, WINNER_COL = 'year', 'state_name', 'state_winner'
 DEM_LEADER_COL, REP_LEADER_COL = 'dem_leader', 'rep_leader'
 DEM_NAT_VOTE_COL, REP_NAT_VOTE_COL = 'dem_national_votes', 'rep_national_votes'
+TOTAL_NAT_VOTE_COL = 'total_national_votes' # Added for clarity
 DEM_STATE_PCT_COL, REP_STATE_PCT_COL = 'dem_state_percentage', 'rep_state_percentage'
 
 def _load_and_clean_data() -> Optional[pd.DataFrame]:
@@ -31,30 +29,32 @@ def _load_and_clean_data() -> Optional[pd.DataFrame]:
 
     try:
         conn = sqlite3.connect(DB_PATH)
-        # SQL query to join all tables and reconstruct the flat data structure
         query = """
             SELECT
-                r.year,
-                r.state_name,
-                s.electoral_votes,
-                r.state_winner,
-                r.dem_state_percentage,
-                r.rep_state_percentage,
-                e.dem_leader,
-                e.rep_leader,
-                e.dem_national_votes,
-                e.rep_national_votes,
-                e.total_national_votes
+                r.year, r.state_name, s.electoral_votes, r.state_winner,
+                r.dem_state_percentage, r.rep_state_percentage,
+                e.dem_leader, e.rep_leader,
+                e.dem_national_votes, e.rep_national_votes, e.total_national_votes
             FROM results r
-            JOIN states s ON r.state_name = s.state_name
-            JOIN elections e ON r.year = e.year
+            LEFT JOIN states s ON r.state_name = s.state_name
+            LEFT JOIN elections e ON r.year = e.year
         """
         df = pd.read_sql_query(query, conn)
         conn.close()
 
-        # The rest of the cleaning is minimal since the DB enforces types
-        df[YEAR_COL] = df[YEAR_COL].astype(int)
+        # --- THIS IS THE CRITICAL FIX ---
+        # Define the columns that should be numeric.
+        vote_cols = [DEM_NAT_VOTE_COL, REP_NAT_VOTE_COL, TOTAL_NAT_VOTE_COL]
+        # Convert vote columns to numeric, coercing errors to NaN (Not a Number).
+        # This handles any missing values gracefully.
+        for col in vote_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
         logger.info(f"Successfully loaded data from database. Shape: {df.shape}")
+        # Drop rows where essential data for analysis is missing.
+        df.dropna(subset=[YEAR_COL, STATE_NAME_COL, WINNER_COL], inplace=True)
+        df[YEAR_COL] = df[YEAR_COL].astype(int)
+
         return df
     except (sqlite3.Error, pd.errors.DatabaseError) as e:
         logger.error(f"Failed to load data from database: {e}", exc_info=True)
@@ -64,8 +64,14 @@ def _create_national_trends_plot(df: pd.DataFrame) -> Optional[str]:
     """Generates a Plotly bar chart for national vote trends."""
     logger.info("Generating national trends bar chart...")
     try:
+        # Group by year and take the first entry for national votes
         national_df = df.groupby(YEAR_COL)[[DEM_NAT_VOTE_COL, REP_NAT_VOTE_COL]].first().reset_index()
+
+        # --- FIX: Ensure the 'total' column is a sum of numbers, not strings ---
+        # This will now work because the columns are numeric.
         national_df['total'] = national_df[DEM_NAT_VOTE_COL] + national_df[REP_NAT_VOTE_COL]
+
+        # Calculate percentages
         national_df['Democratic (%)'] = (national_df[DEM_NAT_VOTE_COL] / national_df['total']) * 100
         national_df['Republican (%)'] = (national_df[REP_NAT_VOTE_COL] / national_df['total']) * 100
 
