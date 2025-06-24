@@ -4,7 +4,7 @@ including creating tables and inserting data.
 """
 import sqlite3
 import logging
-from typing import List
+from typing import List, Dict
 
 from .models import ElectionResult
 
@@ -57,6 +57,18 @@ def create_tables(conn: sqlite3.Connection):
                 UNIQUE(state_name, year)
             );
         """)
+
+        # Population table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS state_populations (
+                state_name TEXT NOT NULL,
+                year INTEGER NOT NULL,
+                population INTEGER,
+                PRIMARY KEY (state_name, year),
+                FOREIGN KEY (state_name) REFERENCES states (state_name)
+            );
+        """)
+
         conn.commit()
         logger.info("Database tables are ready.")
     except sqlite3.Error as e:
@@ -87,6 +99,29 @@ def save_national_data_to_db(national_data: dict):
         logger.info("Successfully saved national data.")
     except sqlite3.Error as e:
         logger.error(f"Database error during national data insertion: {e}", exc_info=True)
+        conn.rollback()
+    finally:
+        conn.close()
+
+def save_population_data_to_db(population_data: List[Dict]):
+    """Saves the scraped population data to the database."""
+    if not population_data:
+        logger.warning("No population data provided to save.")
+        return
+
+    logger.info(f"Saving {len(population_data)} population records to the database...")
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        for item in population_data:
+            cursor.execute(
+                "INSERT OR REPLACE INTO state_populations (state_name, year, population) VALUES (?, ?, ?)",
+                (item['state_name'], item['year'], item['population'])
+            )
+        conn.commit()
+        logger.info("Successfully saved all population data.")
+    except sqlite3.Error as e:
+        logger.error(f"Database error during population data insertion: {e}", exc_info=True)
         conn.rollback()
     finally:
         conn.close()

@@ -18,6 +18,7 @@ PyYAML
 
 # Browser Automation & Dynamic Scraping
 selenium # For Task B-1
+webdriver-manager # Manages browser drivers for Selenium
 
 # Code Quality & Testing
 pytest            # For unit testing (Task D-1)
