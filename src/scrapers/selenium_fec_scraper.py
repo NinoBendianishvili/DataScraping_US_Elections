@@ -11,8 +11,8 @@ from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 
+# Use the centrally configured logger
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 
 class FECScraper:
     """
