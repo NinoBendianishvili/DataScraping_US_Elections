@@ -1,7 +1,7 @@
 # Core Scraping & HTTP Requests
 requests
 beautifulsoup4
-lxml
+html5lib>=1.1
 scrapy  # For Task A-3
 
 # Data Analysis & Reporting

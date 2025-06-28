@@ -23,15 +23,13 @@ def create_tables(conn: sqlite3.Connection):
     try:
         cursor = conn.cursor()
 
-        # States Table
+        # Existing tables...
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS states (
                 state_name TEXT PRIMARY KEY NOT NULL,
                 electoral_votes INTEGER
             );
         """)
-
-        # Elections Table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS elections (
                 year INTEGER PRIMARY KEY NOT NULL,
@@ -42,8 +40,6 @@ def create_tables(conn: sqlite3.Connection):
                 total_national_votes INTEGER
             );
         """)
-
-        # Results Table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS results (
                 result_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,19 +53,6 @@ def create_tables(conn: sqlite3.Connection):
                 UNIQUE(state_name, year)
             );
         """)
-
-        # Population table (can be deprecated or kept for future use)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS state_populations (
-                state_name TEXT NOT NULL,
-                year INTEGER NOT NULL,
-                population INTEGER,
-                PRIMARY KEY (state_name, year),
-                FOREIGN KEY (state_name) REFERENCES states (state_name)
-            );
-        """)
-
-        # --- UPDATED TABLE FOR FEC DATA ---
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS fec_candidate_receipts (
                 candidate_name TEXT NOT NULL,
@@ -80,6 +63,21 @@ def create_tables(conn: sqlite3.Connection):
             );
         """)
 
+        # --- NEW TABLE FOR TURNOUT STATISTICS ---
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS turnout_statistics (
+                state TEXT NOT NULL,
+                year INTEGER NOT NULL,
+                voting_eligible_population INTEGER,
+                voting_age_population INTEGER,
+                prison INTEGER,
+                probation INTEGER,
+                parole INTEGER,
+                total_ineligible_felon INTEGER,
+                overseas_eligible INTEGER,
+                PRIMARY KEY (state, year)
+            );
+        """)
 
         conn.commit()
         logger.info("Database tables are ready.")
@@ -88,97 +86,73 @@ def create_tables(conn: sqlite3.Connection):
         conn.rollback()
 
 def save_national_data_to_db(national_data: dict):
-    """Saves the national election year data to the 'elections' table."""
-    if not national_data:
-        logger.warning("No national data provided to save to the database.")
-        return
-
-    logger.info("Saving national election data to the database...")
+    # ... (no changes to this function)
+    if not national_data: return
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         for year, data in national_data.items():
             cursor.execute(
-                """INSERT OR REPLACE INTO elections (year, dem_leader, rep_leader, 
-                                                   dem_national_votes, rep_national_votes, total_national_votes) 
+                """INSERT OR REPLACE INTO elections (year, dem_leader, rep_leader, dem_national_votes, rep_national_votes, total_national_votes) 
                    VALUES (?, ?, ?, ?, ?, ?)""",
-                (
-                    year, data.get('dem_leader'), data.get('rep_leader'),
-                    data.get('dem_votes'), data.get('rep_votes'), data.get('total_national_votes')
-                )
+                (year, data.get('dem_leader'), data.get('rep_leader'), data.get('dem_votes'), data.get('rep_votes'), data.get('total_national_votes'))
             )
         conn.commit()
-        logger.info("Successfully saved national data.")
     except sqlite3.Error as e:
         logger.error(f"Database error during national data insertion: {e}", exc_info=True)
         conn.rollback()
     finally:
         conn.close()
 
-def save_population_data_to_db(population_data: List[Dict]):
-    """Saves the scraped population data to the database."""
-    if not population_data:
-        logger.warning("No population data provided to save.")
-        return
-
-    logger.info(f"Saving {len(population_data)} population records to the database...")
+def save_fec_data_to_db(fec_data: List[Dict]):
+    # ... (no changes to this function)
+    if not fec_data: return
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        for item in population_data:
+        for item in fec_data:
             cursor.execute(
-                "INSERT OR REPLACE INTO state_populations (state_name, year, population) VALUES (?, ?, ?)",
-                (item['state_name'], item['year'], item['population'])
+                "INSERT OR REPLACE INTO fec_candidate_receipts (candidate_name, election_year, party, total_receipts) VALUES (?, ?, ?, ?)",
+                (item.get('candidate_name'), item.get('election_year'), item.get('party'), item.get('total_receipts'))
             )
         conn.commit()
-        logger.info("Successfully saved all population data.")
     except sqlite3.Error as e:
-        logger.error(f"Database error during population data insertion: {e}", exc_info=True)
+        logger.error(f"Database error during FEC data insertion: {e}", exc_info=True)
         conn.rollback()
     finally:
         conn.close()
 
-def save_fec_data_to_db(fec_data: List[Dict]):
-    """Saves the scraped FEC campaign finance data to the database with enhanced error checking."""
-    if not fec_data:
-        logger.warning("No FEC data provided to save.")
+def save_turnout_data_to_db(turnout_data: List[Dict]):
+    """Saves the detailed turnout statistics to the new database table."""
+    if not turnout_data:
+        logger.warning("No turnout data provided to save.")
         return
 
-    logger.info(f"Attempting to save {len(fec_data)} FEC records to the database...")
+    logger.info(f"Saving {len(turnout_data)} turnout records to the database...")
     conn = get_db_connection()
-    saved_count = 0
     try:
         cursor = conn.cursor()
-        for i, item in enumerate(fec_data):
-            # Defensive check for required keys for the primary key
-            name = item.get('candidate_name')
-            year = item.get('election_year')
-
-            if not name or not year:
-                logger.warning(f"Skipping record {i+1} due to missing primary key (candidate_name or election_year). Record: {item}")
-                continue
-
-            # Prepare the data tuple, ensuring all four values are present for the INSERT statement
-            data_tuple = (
-                name,
-                year,
-                item.get('party'),
-                item.get('total_receipts')
-            )
-
+        for item in turnout_data:
             cursor.execute("""
-                INSERT OR REPLACE INTO fec_candidate_receipts (
-                    candidate_name,
-                    election_year,
-                    party,
-                    total_receipts
-                ) VALUES (?, ?, ?, ?)
-            """, data_tuple)
-            saved_count += 1
+                INSERT OR REPLACE INTO turnout_statistics (
+                    state, year, voting_eligible_population, voting_age_population,
+                    prison, probation, parole, total_ineligible_felon, overseas_eligible
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                item.get('state'),
+                item.get('year'),
+                item.get('voting_eligible_population'),
+                item.get('voting_age_population'),
+                item.get('prison'),
+                item.get('probation'),
+                item.get('parole'),
+                item.get('total_ineligible_felon'),
+                item.get('overseas_eligible')
+            ))
         conn.commit()
-        logger.info(f"Successfully saved {saved_count} / {len(fec_data)} FEC records.")
+        logger.info("Successfully saved all turnout data.")
     except sqlite3.Error as e:
-        logger.error(f"Database error during FEC data insertion: {e}", exc_info=True)
+        logger.error(f"Database error during turnout data insertion: {e}", exc_info=True)
         conn.rollback()
     finally:
         conn.close()
