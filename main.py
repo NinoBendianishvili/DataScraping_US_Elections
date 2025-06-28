@@ -6,13 +6,12 @@ from scrapy.utils.project import get_project_settings
 from scrapy.settings import Settings
 
 from src.scrapers.election_scraper import StateElectionScraper
-from src.data.database import get_db_connection, create_tables, save_national_data_to_db
+from src.data.database import get_db_connection, create_tables, save_national_data_to_db, save_fec_data_to_db
 from src.analysis.reporter import generate_analysis_reports
 from src.utils.config_loader import load_config
 from src.scrapers.scrapy_crawler.election_crawler.spiders.state_spider import StateSpider
+from src.scrapers.selenium_fec_scraper import FECScraper
 
-from src.scrapers.selenium_wikipedia_population import WikipediaPopulationScraper
-from src.data.database import get_db_connection, create_tables, save_national_data_to_db, save_population_data_to_db
 
 def run_legacy_scraper_for_national_data(config):
     """Runs the original scraper to fetch ONLY national data."""
@@ -29,29 +28,17 @@ def run_scrapy_crawler():
     """Configures and runs the Scrapy crawler without changing directory."""
     print("--- Running Scrapy Crawler for State Data ---")
 
-    # --- THIS IS THE NEW, ROBUST WAY ---
-    # 1. Point to the Scrapy settings file
+    sys.path.insert(0, os.path.join(os.getcwd(), 'src', 'scrapers', 'scrapy_crawler'))
     project_settings = get_project_settings()
     settings = Settings()
-    # Scrapy uses its own module loading system, so we need to tell it where to find our project
-    # This is done by adding the path to the src directory to sys.path
-    # The 'election_crawler' module will then be discoverable.
-    sys.path.insert(0, os.path.join(os.getcwd(), 'src', 'scrapers', 'scrapy_crawler'))
     settings.setmodule('election_crawler.settings', priority='project')
-
-    # 2. Create the process with these settings
     process = CrawlerProcess(settings)
-
-    # 3. Crawl
     process.crawl(StateSpider)
-    process.start() # The script will block here until the crawling is finished
-
-    # 4. Clean up the path
+    process.start()
     sys.path.pop(0)
 
 def main():
     """Main function to run the entire scraping and analysis pipeline."""
-    # This ensures all paths are relative to the project root where main.py is run
     project_root = os.getcwd()
 
     config = load_config()
@@ -75,13 +62,11 @@ def main():
     run_scrapy_crawler()
 
     # 3. Fetch dynamic/table data (Selenium) and save
-    print("\n--- Running Selenium Scraper for Population Data ---")
-    # We target census years. Your election years are 2000, 2004, etc.
-    # The closest census years are 2000, 2010, 2020.
-    census_years = [2000, 2010, 2020]
-    population_scraper = WikipediaPopulationScraper(headless=True)
-    population_data = population_scraper.scrape(target_years=census_years)
-    save_population_data_to_db(population_data)
+    print("\n--- Running Selenium Scraper for FEC Campaign Finance Data ---")
+    fec_scraper = FECScraper(headless=True)
+    # Pass the list of target years from the config to the scraper
+    fec_data = fec_scraper.scrape(target_years=config['scraper']['target_years'])
+    save_fec_data_to_db(fec_data)
 
     print("\n" + "-" * 30)
     print("Scraping complete. Data is now in the database.")
