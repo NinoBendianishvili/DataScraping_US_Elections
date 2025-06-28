@@ -3,28 +3,40 @@ import logging
 import time
 from bs4 import BeautifulSoup
 from typing import List, Optional, Dict, Any
-from .parsers import parse_national_election_page
+from .parsers import ParsingStrategy  # Import the abstract strategy
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class StateElectionScraper:
     """
-    Orchestrates scraping NATIONAL election data from the site.
-    State-level data is now handled by the Scrapy spider.
+    Orchestrates scraping NATIONAL election data.
+    This scraper is configured with a parsing strategy, decoupling it from the
+    specifics of how a page is parsed.
     """
     BASE_URL = "https://www.270towin.com"
 
-    def __init__(self, target_years: List[int], delay_seconds: float, **kwargs):
+    def __init__(self, target_years: List[int], delay_seconds: float,
+                 parsing_strategy: ParsingStrategy, **kwargs):
+        """
+        Initializes the scraper with a specific parsing strategy.
+
+        Args:
+            target_years (List[int]): The election years to scrape.
+            delay_seconds (float): Time to wait between requests.
+            parsing_strategy (ParsingStrategy): An object that defines how to parse the page.
+        """
         self.target_years = sorted(list(set(target_years)))
         self.delay_seconds = delay_seconds
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         })
+        # The scraper holds a reference to the strategy object
+        self.parsing_strategy = parsing_strategy
         self.national_year_data: Dict[int, Dict[str, Any]] = {}
         self.max_retries = 3
-        self.backoff_factor = 1.0  # Base delay for backoff in seconds
-        logging.info(f"Initialized legacy scraper for national data. Years: {self.target_years}")
+        self.backoff_factor = 1.0
+        logging.info(f"Initialized legacy scraper with strategy: {parsing_strategy.__class__.__name__}")
 
     def _scrape_single_election_year(self, year: int) -> Optional[List[Dict[str, str]]]:
         """Fetches and parses a single election year page with retries and backoff."""
@@ -34,46 +46,35 @@ class StateElectionScraper:
         for attempt in range(self.max_retries):
             try:
                 response = self.session.get(url, timeout=15)
-
                 if response.status_code == 429:
-                    # Handle "Too Many Requests"
                     retry_after = int(response.headers.get("Retry-After", 0))
                     wait_time = retry_after if retry_after > 0 else self.backoff_factor * (2 ** attempt)
-                    logging.warning(
-                        f"Status 429 on attempt {attempt + 1}/{self.max_retries} for {url}. "
-                        f"Retrying in {wait_time:.2f}s..."
-                    )
+                    logging.warning(f"Status 429 on attempt {attempt + 1}/{self.max_retries}. Retrying in {wait_time:.2f}s...")
                     time.sleep(wait_time)
                     continue
-
-                response.raise_for_status()  # Raise exception for other 4xx/5xx errors
-
-                # If successful (2xx status code)
+                response.raise_for_status()
                 soup = BeautifulSoup(response.content, 'lxml')
-                return parse_national_election_page(soup)
+
+                # --- STRATEGY PATTERN IN ACTION ---
+                # The scraper calls the parse method on its strategy object,
+                # without needing to know the implementation details.
+                return self.parsing_strategy.parse(soup)
 
             except requests.RequestException as e:
                 logging.warning(f"Request for {url} failed on attempt {attempt + 1}/{self.max_retries}: {e}")
                 if attempt + 1 == self.max_retries:
-                    logging.error(f"All {self.max_retries} retries failed for {url}. Aborting scrape for this year.")
+                    logging.error(f"All {self.max_retries} retries failed for {url}. Aborting.")
                     return None
-
-                # Exponential backoff for other request-related errors (e.g., DNS, connection timeout)
                 wait_time = self.backoff_factor * (2 ** attempt)
-                logging.info(f"Waiting {wait_time:.2f}s before next retry...")
                 time.sleep(wait_time)
-
-        return None # This line is reached if all retries fail
-
+        return None
 
     def _fetch_all_national_data(self):
         """Fetches national leader and vote data for all target years."""
         print(f"\nFetching national data for years: {self.target_years}...")
         for i, year in enumerate(self.target_years):
-            # Add a polite delay between requests to different pages. No delay before the first one.
             if i > 0:
                 time.sleep(self.delay_seconds)
-
             year_results = self._scrape_single_election_year(year)
             if year_results:
                 year_entry = {}

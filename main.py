@@ -5,22 +5,22 @@ from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 from scrapy.settings import Settings
 
-from src.scrapers.election_scraper import StateElectionScraper
 from src.data.database import get_db_connection, create_tables, save_national_data_to_db, save_fec_data_to_db
 from src.analysis.reporter import generate_analysis_reports
 from src.utils.config_loader import load_config
 from src.scrapers.scrapy_crawler.election_crawler.spiders.state_spider import StateSpider
-from src.scrapers.selenium_fec_scraper import FECScraper
-
+from src.scrapers.factory import ScraperFactory # Import the factory
 
 def run_legacy_scraper_for_national_data(config):
-    """Runs the original scraper to fetch ONLY national data."""
+    """Runs the original scraper to fetch ONLY national data using a factory."""
     print("--- Running Legacy Scraper for National Data ---")
-    scraper = StateElectionScraper(
-        target_years=config['target_years'],
-        delay_seconds=config['delay_seconds'],
-        max_workers=config['max_workers']
-    )
+
+    # --- FACTORY PATTERN IN ACTION ---
+    # The main logic no longer knows about StateElectionScraper.
+    # It just asks the factory for a "national" scraper.
+    factory = ScraperFactory()
+    scraper = factory.create_scraper("national", **config)
+
     scraper._fetch_all_national_data()
     return scraper.national_year_data
 
@@ -54,6 +54,9 @@ def main():
     print("Starting Election Data Scraper and Analyzer")
     print("=" * 30)
 
+    # Instantiate the factory once for the pipeline
+    scraper_factory = ScraperFactory()
+
     # 1. Fetch national data (non-Scrapy) and save
     national_data = run_legacy_scraper_for_national_data(config['scraper'])
     save_national_data_to_db(national_data)
@@ -63,8 +66,11 @@ def main():
 
     # 3. Fetch dynamic/table data (Selenium) and save
     print("\n--- Running Selenium Scraper for FEC Campaign Finance Data ---")
-    fec_scraper = FECScraper(headless=True)
-    # Pass the list of target years from the config to the scraper
+    # --- FACTORY PATTERN IN ACTION ---
+    fec_scraper = scraper_factory.create_scraper(
+        "fec",
+        headless=True
+    )
     fec_data = fec_scraper.scrape(target_years=config['scraper']['target_years'])
     save_fec_data_to_db(fec_data)
 
