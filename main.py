@@ -81,8 +81,7 @@ def main():
     census_years = [2000, 2010, 2020]
     population_scraper = WikipediaPopulationScraper(headless=True)
     population_data = population_scraper.scrape(target_years=census_years)
-    if population_data:
-        save_population_data_to_db(population_data)
+    save_population_data_to_db(population_data)
 
     print("\n" + "-" * 30)
     print("Scraping complete. Data is now in the database.")
