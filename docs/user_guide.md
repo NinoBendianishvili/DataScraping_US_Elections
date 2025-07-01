@@ -1,90 +1,157 @@
-# User Guide
+
+# User Guide: US Election Data Scraping & Analysis System
 
 ## 1. Introduction
 
-Welcome to the U.S. Election Data Scraper! This guide provides all the necessary steps to install, configure, and run the application to scrape election data and generate analysis reports.
+Welcome to the **US Election Data Scraping & Analysis System**! This guide walks you through setting up and using this powerful tool to collect, store, and analyze historical US presidential election data.
 
-## 2. Installation
+The system is a command-line application that automates a multi-stage data pipeline:
 
-Follow these steps to set up the project on your local machine.
+1. **Scrape**: Concurrently fetches data from multiple web sources, including national election results, FEC candidate filings, and state-level voter turnout statistics.  
+2. **Store**: Cleans the collected data and stores it in a structured SQLite database (`election_data.db`).  
+3. **Report**: Queries the database to perform data analysis and generates interactive HTML reports with charts and maps.
 
-### Prerequisites
-- Python 3.8 or newer
-- Git
+---
 
-### Setup Instructions
-1.  **Clone the repository:**
-    ```bash
-    git clone <your-repository-url>
-    cd DataScraping_US_Elections-final-project
-    ```
+## 2. Prerequisites
 
-2.  **Create and activate a virtual environment:**
-    - On macOS/Linux:
-      ```bash
-      python3 -m venv .venv
-      source .venv/bin/activate
-      ```
-    - On Windows:
-      ```bash
-      python -m venv .venv
-      .\.venv\Scripts\activate
-      ```
+Ensure the following are installed on your system:
 
-3.  **Install the required libraries:**
-    ```bash
-    pip install -r requirements.txt
-    ```
+- **Python 3.9+**
+- **Git** (for cloning the repository)
+- **Google Chrome** or **Mozilla Firefox** (required for the Selenium-based scraper)
 
-## 3. Configuration
+---
 
-The application's behavior can be customized via the `config.yaml` file located in the project root. This file allows you to change settings without modifying the source code.
+## 3. Installation and Setup
 
-Key settings include:
-- `target_years`: A list of election years to scrape.
-- `paths`: Directories for saving logs and reports.
-- `filenames`: The output names for the generated HTML reports.
-- `templates`: The names of the Jinja2 HTML templates used for reporting.
+### Step 1: Clone the Repository
 
-**Example `config.yaml` snippet:**
-yaml
+Open your terminal and run:
+
+```bash
+git clone <your-repository-url>
+cd DataScraping_US_Elections-final-project
+```
+
+### Step 2: Create a Virtual Environment
+
+It’s recommended to use a Python virtual environment to avoid dependency conflicts.
+
+```bash
+# Create the virtual environment
+python -m venv .venv
+
+# Activate the virtual environment
+# On macOS/Linux:
+source .venv/bin/activate
+# On Windows:
+.venv\Scripts\activate
+```
+
+You should see `(.venv)` at the beginning of your terminal prompt, indicating the environment is active.
+
+### Step 3: Install Dependencies
+
+Install all the required Python libraries:
+
+```bash
+pip install -r requirements.txt
+```
+
+The `webdriver-manager` library will handle browser driver downloads for Selenium.
+
+### Step 4: Configure the Application (Optional)
+
+You can modify `config/settings.yaml` to customize application behavior.
+
+Example: To change the target election years:
+
+```yaml
+# config/settings.yaml
 scraper:
   target_years: [2020, 2016, 2012, 2008, 2004, 2000]
-
-paths:
-  log_dir: "logs"
-  analysis_report_dir: "analysis_report"
-
-filenames:
-  bar_chart_report: "election_analysis_report.html"
-  static_maps_report: "election_static_maps_report.html"
-## 4. `src.data` Module
-Handles data storage and database interactions.
-
-#### `database.py`
-- **`DB_PATH`**: A constant pointing to the SQLite database file (`election_data.db`).
-- **`get_db_connection()`**: Returns an `sqlite3.Connection` object to the database.
-- **`create_tables()`**: Executes SQL `CREATE TABLE` statements to set up the database schema if it doesn't exist.
-- **`save_national_data_to_db(data)`**: Saves national summary and state-level results to the `elections` and `results` tables.
-- **`save_fec_data_to_db(data)`**: Saves candidate finance data to the `fec_data` table.
-- **`save_turnout_data_to_db(data)`**: Saves voter turnout data to the `turnout` table.
+  # ... other settings
+```
 
 ---
 
-## 5. `src.analysis` Module
-Contains all logic for data analysis and visualization.
+## 4. Usage: Core Commands
 
-#### `reporter.py`
-- **`generate_analysis_reports(...)`**: The primary public function. It orchestrates the entire reporting process, from loading data to rendering the final HTML files.
-- **`_load_and_clean_data() -> pd.DataFrame`**: A helper function that executes a SQL query to join all relevant tables from the database into a single pandas DataFrame. It also performs critical cleaning and standardization steps, such as handling `NaN` values, standardizing state names (`str.title()`), and mapping party labels (`'DEMOCRAT'` -> `'Democratic'`).
-- **`_create_national_trends_plot(df) -> str`**: Generates the HTML `div` for the national popular vote bar chart using Plotly.
-- **`_create_election_map_plot(df, year) -> str`**: Generates the HTML `div` for the choropleth map of a single election year using Plotly.
-- **`_render_and_save_report(...)`**: A utility function that uses Jinja2 to render a template with the provided context (containing plot divs) and save it as an HTML file.
+Operate the application via the `main.py` script. There are two core commands:
+
+### Command 1: `scrape`
+
+Initiates the entire data collection and storage pipeline.
+
+```bash
+python main.py scrape
+```
+
+#### What to Expect:
+
+- **Database Initialization**: Ensures `election_data.db` is ready.
+- **Concurrent Scrapers**: Three parallel background threads fetch national data, FEC data, and voter turnout.
+- **Scrapy Crawler**: Collects detailed state-by-state results.
+- **Data Saving**: All data is stored in `election_data.db`.
+
+You'll see:
+
+```
+Scraping and data storage complete
+```
+
+### Command 2: `report`
+
+Uses the stored data to generate HTML reports.
+
+```bash
+python main.py report
+```
+
+#### What to Expect:
+
+- Reads all data from `election_data.db`.
+- Performs analysis and creates visualizations.
+- Saves output to `data_output/reports/`:
+
+#### Output Files:
+
+- `bar_chart_report.html`: Interactive national and state vote trends.
+- `static_maps_report.html`: Interactive US choropleth maps for each election year.
+
+Open these HTML files in your browser to view the results.
 
 ---
 
-## 6. `src.utils` Module
-Contains utility functions used across the application.
+## 5. Typical Workflow
 
-#### `config_loader.py`
-- **`load_config() -> dict`**: Reads the `config.yaml` file from the project root, parses it using `PyYAML`, and returns the contents as a Python dictionary.
+1. **Set up the project** (see installation instructions).
+2. **Run the scraper**:
+
+    ```bash
+    python main.py scrape
+    ```
+
+3. **Generate reports**:
+
+    ```bash
+    python main.py report
+    ```
+
+4. **View results** in `data_output/reports/`.
+
+---
+
+## 6. Troubleshooting
+
+- **Selenium/WebDriver Errors**:
+  - Make sure Chrome/Firefox is up to date.
+  - `webdriver-manager` should handle drivers, but manual installation may be needed in restricted environments.
+
+- **Scraper Fails**:
+  - Web page structure might have changed.
+  - Update logic in `src/scrapers/parsers.py`.
+
+- **Firewall/Network Issues**:
+  - Ensure internet access and that firewalls aren't blocking connections.
