@@ -81,7 +81,7 @@ class TurnoutScraper:
         Manually reconstructs the header from the first two rows to handle
         rowspans and messy data, then extracts the required columns.
         """
-        header_row1 = df.iloc[0].fillna(method='ffill')
+        header_row1 = df.iloc[0].ffill()
         header_row2 = df.iloc[1]
 
         new_columns = []
