@@ -47,7 +47,7 @@ Key settings include:
 - `templates`: The names of the Jinja2 HTML templates used for reporting.
 
 **Example `config.yaml` snippet:**
-```yaml
+yaml
 scraper:
   target_years: [2020, 2016, 2012, 2008, 2004, 2000]
 
