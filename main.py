@@ -13,7 +13,7 @@ from scrapy.settings import Settings
 
 from src.scrapers.factory import ScraperFactory
 from src.data.database import get_db_connection, create_tables, save_national_data_to_db, save_fec_data_to_db, save_turnout_data_to_db
-from src.analysis.reporter import generate_analysis_reports
+from src.analysis.reporter import generate_maps_report, generate_trends_report
 from src.utils.config_loader import load_config
 from src.scrapers.scrapy_crawler.election_crawler.spiders.state_spider import StateSpider
 
@@ -155,12 +155,8 @@ def report():
     print("-" * 30)
 
     os.makedirs(config['paths']['analysis_report_dir'], exist_ok=True)
-    generate_analysis_reports(
-        report_dir=config['paths']['analysis_report_dir'],
-        bar_chart_filename=config['filenames']['bar_chart_report'],
-        static_maps_filename=config['filenames']['static_maps_report'],
-        template_config=config['templates']
-    )
+    generate_maps_report("analysis_report/election_maps.html")
+    generate_trends_report("analysis_report/election_trends.html")
     print("Report generation complete.")
 
 

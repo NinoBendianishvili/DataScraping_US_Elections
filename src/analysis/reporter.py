@@ -1,179 +1,292 @@
 """
-Handles data analysis and generation of HTML reports with visualizations.
-This module consolidates the logic from the original analyzer.py and generator.py.
+Complete election reporter with both maps and trends reports using database
 """
-import os
+import json
 import logging
 import pandas as pd
-import plotly.express as px
-from jinja2 import Environment, FileSystemLoader, select_autoescape
-from typing import List, Dict, Optional, Any
 import sqlite3
+from collections import defaultdict
+from typing import Dict, List, Optional, Tuple
+from jinja2 import Environment, FileSystemLoader
 from src.data.database import DB_PATH
 
-
 logger = logging.getLogger(__name__)
-PARTY_COLORS = {'Democratic': 'blue', 'Republican': 'red'}
-YEAR_COL, STATE_NAME_COL, WINNER_COL = 'year', 'state_name', 'state_winner'
-DEM_LEADER_COL, REP_LEADER_COL = 'dem_leader', 'rep_leader'
-DEM_NAT_VOTE_COL, REP_NAT_VOTE_COL = 'dem_national_votes', 'rep_national_votes'
-TOTAL_NAT_VOTE_COL = 'total_national_votes' # Added for clarity
-DEM_STATE_PCT_COL, REP_STATE_PCT_COL = 'dem_state_percentage', 'rep_state_percentage'
 
-def _load_and_clean_data() -> Optional[pd.DataFrame]:
-    """Loads and cleans the election data by querying the SQLite database."""
-    logger.info(f"Loading data from database: {DB_PATH}")
-    if not os.path.exists(DB_PATH):
-        logger.error(f"Database file not found at {DB_PATH}. Please run the scraper first.")
-        return None
+# State abbreviation mapping
+STATE_ABBR = {
+    "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR",
+    "California": "CA", "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE",
+    "District of Columbia": "DC", "Florida": "FL", "Georgia": "GA", "Hawaii": "HI",
+    "Idaho": "ID", "Illinois": "IL", "Indiana": "IN", "Iowa": "IA", "Kansas": "KS",
+    "Kentucky": "KY", "Louisiana": "LA", "Maine": "ME", "Maryland": "MD",
+    "Massachusetts": "MA", "Michigan": "MI", "Minnesota": "MN", "Mississippi": "MS",
+    "Missouri": "MO", "Montana": "MT", "Nebraska": "NE", "Nevada": "NV",
+    "New Hampshire": "NH", "New Jersey": "NJ", "New Mexico": "NM", "New York": "NY",
+    "North Carolina": "NC", "North Dakota": "ND", "Ohio": "OH", "Oklahoma": "OK",
+    "Oregon": "OR", "Pennsylvania": "PA", "Rhode Island": "RI",
+    "South Carolina": "SC", "South Dakota": "SD", "Tennessee": "TN", "Texas": "TX",
+    "Utah": "UT", "Vermont": "VT", "Virginia": "VA", "Washington": "WA",
+    "West Virginia": "WV", "Wisconsin": "WI", "Wyoming": "WY"
+}
+
+def _get_db_connection():
+    """Helper to get database connection"""
+    return sqlite3.connect(DB_PATH)
+
+def _load_election_data() -> Dict[int, Dict[str, List[str]]]:
+    """Load election data for maps from database"""
+    election_by_year = defaultdict(lambda: {"dem": [], "rep": []})
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _get_db_connection()
         query = """
-            SELECT
-                r.year, r.state_name, s.electoral_votes, r.state_winner,
-                r.dem_state_percentage, r.rep_state_percentage,
-                e.dem_leader, e.rep_leader,
-                e.dem_national_votes, e.rep_national_votes, e.total_national_votes
+            SELECT r.year, r.state_name, r.state_winner
             FROM results r
-            LEFT JOIN states s ON r.state_name = s.state_name
-            LEFT JOIN elections e ON r.year = e.year
-        """
-        df = pd.read_sql_query(query, conn)
+            WHERE r.state_name IN ({})
+            ORDER BY r.year
+        """.format(",".join([f"'{state}'" for state in STATE_ABBR.keys()]))
+
+        for row in conn.execute(query):
+            year, state, winner = row
+            abbr = STATE_ABBR.get(state)
+            if not abbr:
+                continue
+
+            if "democrat" in winner.lower():
+                election_by_year[year]["dem"].append(abbr)
+            elif "republican" in winner.lower():
+                election_by_year[year]["rep"].append(abbr)
+
+        return dict(election_by_year)
+    except Exception as e:
+        logger.error(f"Database error loading election data: {e}")
+        return {}
+    finally:
         conn.close()
 
-        # --- THIS IS THE CRITICAL FIX ---
-        # Define the columns that should be numeric.
-        vote_cols = [DEM_NAT_VOTE_COL, REP_NAT_VOTE_COL, TOTAL_NAT_VOTE_COL]
-        # Convert vote columns to numeric, coercing errors to NaN (Not a Number).
-        # This handles any missing values gracefully.
-        for col in vote_cols:
+def _load_trends_data() -> Tuple[pd.DataFrame, List[int]]:
+    """Load data for trends report"""
+    try:
+        conn = _get_db_connection()
+        query = """
+            SELECT 
+                r.year, 
+                r.state_name,
+                r.dem_state_percentage,
+                r.rep_state_percentage,
+                e.dem_national_votes,
+                e.rep_national_votes
+            FROM results r
+            JOIN elections e ON r.year = e.year
+            ORDER BY r.year, r.state_name
+        """
+        df = pd.read_sql_query(query, conn)
+
+        # Clean data
+        numeric_cols = ['dem_state_percentage', 'rep_state_percentage',
+                        'dem_national_votes', 'rep_national_votes']
+        for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        logger.info(f"Successfully loaded data from database. Shape: {df.shape}")
-        # Drop rows where essential data for analysis is missing.
-        df.dropna(subset=[YEAR_COL, STATE_NAME_COL, WINNER_COL], inplace=True)
-        df[YEAR_COL] = df[YEAR_COL].astype(int)
-
-        return df
-    except (sqlite3.Error, pd.errors.DatabaseError) as e:
-        logger.error(f"Failed to load data from database: {e}", exc_info=True)
-        return None
-
-def _create_national_trends_plot(df: pd.DataFrame) -> Optional[str]:
-    """Generates a Plotly bar chart for national vote trends."""
-    logger.info("Generating national trends bar chart...")
-    try:
-        # Group by year and take the first entry for national votes
-        national_df = df.groupby(YEAR_COL)[[DEM_NAT_VOTE_COL, REP_NAT_VOTE_COL]].first().reset_index()
-
-        # --- FIX: Ensure the 'total' column is a sum of numbers, not strings ---
-        # This will now work because the columns are numeric.
-        national_df['total'] = national_df[DEM_NAT_VOTE_COL] + national_df[REP_NAT_VOTE_COL]
-
-        # Calculate percentages
-        national_df['Democratic (%)'] = (national_df[DEM_NAT_VOTE_COL] / national_df['total']) * 100
-        national_df['Republican (%)'] = (national_df[REP_NAT_VOTE_COL] / national_df['total']) * 100
-
-        plot_df = national_df.melt(id_vars=YEAR_COL, value_vars=['Democratic (%)', 'Republican (%)'],
-                                   var_name='Party', value_name='Percentage')
-
-        fig = px.bar(plot_df, x=YEAR_COL, y='Percentage', color='Party', barmode='group',
-                     title="National Popular Vote Share (%) by Year",
-                     labels={'Percentage': 'Vote Percentage (%)', YEAR_COL: 'Election Year'},
-                     text_auto='.1f', color_discrete_map=PARTY_COLORS)
-        fig.update_layout(yaxis_range=[0, 100], legend_title_text='Party')
-        return fig.to_html(full_html=False, include_plotlyjs='cdn')
+        years = sorted(df['year'].unique())
+        return df, years
     except Exception as e:
-        logger.error(f"Failed to create national bar chart: {e}", exc_info=True)
-        return None
+        logger.error(f"Database error loading trends data: {e}")
+        return pd.DataFrame(), []
+    finally:
+        conn.close()
 
-def _create_state_trends_plot(df: pd.DataFrame, state_name: str) -> Optional[str]:
-    """Generates a Plotly bar chart for a single state's vote trends."""
-    state_df = df[df[STATE_NAME_COL] == state_name]
-    if state_df.empty: return None
+def _generate_map_html(election_data: dict) -> str:
+    """Generate HTML for the interactive maps report"""
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Election Maps</title>
+        <script src='https://cdn.plot.ly/plotly-latest.min.js'></script>
+        <style>
+            body {{ font-family: Arial; background: #f8f9fa; padding: 20px; }}
+            .container {{ 
+                max-width: 1000px; margin: 0 auto; 
+                background: white; padding: 20px; border-radius: 8px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }}
+            .map-container {{ display: none; }}
+            .map-container.active {{ display: block; }}
+            select {{ 
+                display: block; margin: 20px auto; padding: 8px; 
+                font-size: 16px; 
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>U.S. Election Results</h1>
+            <select id="year-selector">
+                {''.join(f'<option value="{year}">{year}</option>' for year in sorted(election_data))}
+            </select>
+            
+            {''.join(
+        f'<div id="map-{year}" class="map-container">'
+        f'<h2>{year} Results</h2><div id="plot-{year}"></div></div>'
+        for year in sorted(election_data)
+    )}
+        </div>
 
-    plot_df = state_df.melt(id_vars=YEAR_COL, value_vars=[DEM_STATE_PCT_COL, REP_STATE_PCT_COL],
-                            var_name='Party', value_name='Percentage')
-    plot_df['Party'] = plot_df['Party'].map({DEM_STATE_PCT_COL: 'Democratic', REP_STATE_PCT_COL: 'Republican'})
+        <script>
+            const data = {json.dumps(election_data)};
+            
+            function plotMap(year) {{
+                const states = data[year];
+                Plotly.newPlot(`plot-${{year}}`, [
+                    {{
+                        type: 'choropleth',
+                        locations: states.dem,
+                        z: Array(states.dem.length).fill(0),
+                        locationmode: 'USA-states',
+                        colorscale: [[0, 'blue'], [1, 'blue']],
+                        showscale: false,
+                        name: 'Democrat'
+                    }},
+                    {{
+                        type: 'choropleth',
+                        locations: states.rep,
+                        z: Array(states.rep.length).fill(1),
+                        locationmode: 'USA-states',
+                        colorscale: [[0, 'red'], [1, 'red']],
+                        showscale: false,
+                        name: 'Republican'
+                    }}
+                ], {{
+                    geo: {{ scope: 'usa', projection: {{ type: 'albers usa' }} }},
+                    margin: {{ t: 50, l: 0, r: 0, b: 0 }}
+                }});
+            }}
 
-    fig = px.bar(plot_df, x=YEAR_COL, y='Percentage', color='Party', barmode='group',
-                 title=f"{state_name} Presidential Vote Share (%)", text_auto='.1f',
-                 color_discrete_map=PARTY_COLORS, labels={'Percentage': 'State Vote %'})
-    fig.update_layout(yaxis_range=[0, 100], showlegend=False)
-    return fig.to_html(full_html=False, include_plotlyjs=False)
+            document.getElementById('year-selector').addEventListener('change', function() {{
+                document.querySelectorAll('.map-container').forEach(el => 
+                    el.classList.remove('active'));
+                const year = this.value;
+                const mapEl = document.getElementById(`map-${{year}}`);
+                mapEl.classList.add('active');
+                plotMap(year);
+            }});
 
-def _create_election_map_plot(df_year: pd.DataFrame, year: int, include_js: bool) -> Optional[str]:
-    """Creates a Plotly choropleth map for a single election year."""
-    try:
-        fig = px.choropleth(
-            df_year, locations=STATE_NAME_COL, locationmode='USA-states',
-            color=WINNER_COL, hover_name=STATE_NAME_COL,
-            hover_data={DEM_LEADER_COL: True, REP_LEADER_COL: True},
-            color_discrete_map=PARTY_COLORS, scope='usa',
-            title=f"U.S. Presidential Election Results - {year}"
-        )
-        fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0}, legend_title_text='Winning Party')
-        return fig.to_html(full_html=False, include_plotlyjs=include_js)
-    except Exception as e:
-        logger.error(f"Failed to create map for year {year}: {e}", exc_info=True)
-        return None
+            // Load first year
+            const firstYear = Object.keys(data)[0];
+            document.getElementById(`map-${{firstYear}}`).classList.add('active');
+            plotMap(firstYear);
+        </script>
+    </body>
+    </html>
+    """
 
-def _render_and_save_report(template_dir: str, template_name: str, context: Dict[str, Any], output_path: str):
-    """Renders a Jinja2 template and saves it to a file."""
-    try:
-        env = Environment(loader=FileSystemLoader(template_dir), autoescape=select_autoescape(['html']))
-        template = env.get_template(template_name)
-        html_content = template.render(context)
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(html_content)
-        logger.info(f"Successfully generated report: {output_path}")
-    except Exception as e:
-        logger.error(f"Failed to render or save report {template_name}: {e}", exc_info=True)
+def _generate_trends_html(df: pd.DataFrame, years: list) -> str:
+    """Generate HTML for the trends report"""
+    # National trends
+    national = df.groupby('year')[['dem_national_votes', 'rep_national_votes']].sum()
+    national['dem_pct'] = (national['dem_national_votes'] /
+                           (national['dem_national_votes'] + national['rep_national_votes'])) * 100
+    national['rep_pct'] = 100 - national['dem_pct']
 
-def generate_analysis_reports(report_dir: str, bar_chart_filename: str,
-                              static_maps_filename: str, template_config: Dict[str, str], **kwargs):
-    """Main function to generate all analysis reports."""
-    # The function no longer needs input_csv_path
-    df = _load_and_clean_data()
-    if df is None or df.empty:
-        logger.error("Analysis aborted due to data loading failure.")
+    # State trends (example for a few states)
+    states = ['California', 'Texas', 'Florida', 'New York', 'Ohio']
+    state_data = {state: df[df['state_name'] == state] for state in states}
+
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Election Trends</title>
+        <script src='https://cdn.plot.ly/plotly-latest.min.js'></script>
+        <style>
+            body {{ font-family: Arial; background: #f8f9fa; padding: 20px; }}
+            .container {{ 
+                max-width: 1200px; margin: 0 auto; 
+                background: white; padding: 20px; border-radius: 8px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }}
+            .plot {{ margin: 30px 0; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Election Trends {min(years)}-{max(years)}</h1>
+            
+            <div class="plot">
+                <h2>National Vote Share</h2>
+                <div id="national-plot"></div>
+            </div>
+            
+            {''.join(
+        f'<div class="plot"><h2>{state} Trends</h2><div id="state-{state.lower()}"></div></div>'
+        for state in states
+    )}
+        </div>
+
+        <script>
+            // National plot
+            Plotly.newPlot('national-plot', [
+                {{
+                    x: {json.dumps(national.index.tolist())},
+                    y: {json.dumps(national['dem_pct'].tolist())},
+                    name: 'Democrat',
+                    type: 'bar',
+                    marker: {{ color: 'blue' }}
+                }},
+                {{
+                    x: {json.dumps(national.index.tolist())},
+                    y: {json.dumps(national['rep_pct'].tolist())},
+                    name: 'Republican', 
+                    type: 'bar',
+                    marker: {{ color: 'red' }}
+                }}
+            ], {{
+                barmode: 'stack',
+                yaxis: {{ title: 'Vote Percentage' }}
+            }});
+
+            // State plots
+            {''.join(
+        f"Plotly.newPlot('state-{state.lower()}', ["
+        f"{{"
+        f"x: {json.dumps(state_data[state]['year'].tolist())}, "
+        f"y: {json.dumps(state_data[state]['dem_state_percentage'].tolist())}, "
+        f"name: 'Democrat', type: 'line', line: {{ color: 'blue' }} "
+        f"}}, "
+        f"{{"
+        f"x: {json.dumps(state_data[state]['year'].tolist())}, "
+        f"y: {json.dumps(state_data[state]['rep_state_percentage'].tolist())}, "
+        f"name: 'Republican', type: 'line', line: {{ color: 'red' }} "
+        f"}}"
+        f"], {{ yaxis: {{ title: 'Vote Percentage', range: [0, 100] }} }});"
+        for state in states
+    )}
+        </script>
+    </body>
+    </html>
+    """
+
+def generate_maps_report(output_path: str):
+    """Generate interactive maps report"""
+    election_data = _load_election_data()
+    if not election_data:
+        logger.error("No election data available for maps")
         return
 
-    # --- 1. Generate Bar Chart Report ---
-    national_plot_div = _create_national_trends_plot(df)
-    state_plot_divs = {
-        state: _create_state_trends_plot(df, state)
-        for state in sorted(df[STATE_NAME_COL].unique())
-    }
-    bar_chart_context = {
-        'national_plot_div': national_plot_div,
-        'state_plot_divs': {k: v for k, v in state_plot_divs.items() if v}
-    }
-    _render_and_save_report(
-        template_dir=os.path.join(os.path.dirname(__file__), template_config['template_dir']),
-        template_name=template_config['bar_chart_template'],
-        context=bar_chart_context,
-        output_path=os.path.join(report_dir, bar_chart_filename)
-    )
+    html = _generate_map_html(election_data)
+    with open(output_path, 'w') as f:
+        f.write(html)
+    logger.info(f"Maps report generated at {output_path}")
 
-    # --- 2. Generate Static Maps Report ---
-    map_divs = {}
-    years = sorted(df[YEAR_COL].unique())
-    for i, year in enumerate(years):
-        df_year = df[df[YEAR_COL] == year]
-        # Include Plotly.js only for the first map
-        map_div = _create_election_map_plot(df_year, year, include_js=(i == 0))
-        if map_div:
-            map_divs[year] = map_div
+def generate_trends_report(output_path: str):
+    """Generate trends analysis report"""
+    df, years = _load_trends_data()
+    if df.empty:
+        logger.error("No trends data available")
+        return
 
-    maps_context = {
-        'map_divs': map_divs,
-        'years_sorted': sorted(map_divs.keys())
-    }
-    _render_and_save_report(
-        template_dir=os.path.join(os.path.dirname(__file__), template_config['template_dir']),
-        template_name=template_config['map_report_template'],
-        context=maps_context,
-        output_path=os.path.join(report_dir, static_maps_filename)
-    )
+    html = _generate_trends_html(df, years)
+    with open(output_path, 'w') as f:
+        f.write(html)
+    logger.info(f"Trends report generated at {output_path}")
